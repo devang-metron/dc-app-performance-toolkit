@@ -5,8 +5,8 @@ from util.api.confluence_clients import ConfluenceRestClient
 from util.api.bitbucket_clients import BitbucketRestClient
 from util.api.crowd_clients import CrowdRestClient
 from util.api.bamboo_clients import BambooClient
-from lxml import etree
 import json
+from lxml import html
 
 JIRA = 'jira'
 CONFLUENCE = 'confluence'
@@ -37,6 +37,11 @@ class BaseApplication:
         self.config = config_yml
 
     def get_default_actions(self):
+        """
+        Open and read "default_test_actions.json" file to get default actions of the product (e.g. Jira) in test.
+
+        :return: default actions of the product (e.g. Jira) in test.
+        """
         actions_json = read_json_file(DEFAULT_ACTIONS)
         return actions_json[self.type]
 
@@ -52,6 +57,18 @@ class BaseApplication:
     def locust_default_actions(self):
         return self.get_default_actions()['locust']
 
+    @property
+    def processors(self):
+        return self.client.get_available_processors()
+
+    @property
+    def deployment(self):
+        return self.client.get_deployment_type()
+
+    @property
+    def java_version(self):
+        return None  # TODO: Add Java version to results_summary.log for all supported products
+
 
 class Jira(BaseApplication):
     type = JIRA
@@ -64,7 +81,7 @@ class Jira(BaseApplication):
 
     @property
     def nodes_count(self):
-        return self.client.get_cluster_nodes_count(jira_version=self.version)
+        return len(self.client.get_nodes())
 
     def __issues_count(self):
         return self.client.get_total_issues_count()
@@ -83,16 +100,23 @@ class Confluence(BaseApplication):
 
     @property
     def nodes_count(self):
-        return self.client.get_confluence_nodes_count()
+        return len(self.client.get_confluence_nodes())
 
     @property
     def dataset_information(self):
         return f"{self.client.get_total_pages_count()} pages"
 
+    @property
+    def java_version(self):
+        full_system_info = self.client.get_system_info_page()
+        java_versions_parsed = html.fromstring(full_system_info).xpath('//*[contains(@id, "java.version")]')
+        if java_versions_parsed:
+            return java_versions_parsed[0].text
+        return None
+
 
 class Bitbucket(BaseApplication):
     type = BITBUCKET
-    bitbucket_repos_selector = "#content-bitbucket\.atst\.repositories-0>.field-group>.field-value"  # noqa W605
 
     @property
     def version(self):
@@ -104,13 +128,7 @@ class Bitbucket(BaseApplication):
 
     @property
     def dataset_information(self):
-        system_page_html = self.client.get_bitbucket_system_page()
-        if 'Repositories' in system_page_html:
-            dom = etree.HTML(system_page_html)
-            repos_count = dom.cssselect(self.bitbucket_repos_selector)[0].text
-            return f'{repos_count} repositories'
-        else:
-            return 'Could not parse number of Bitbucket repositories'
+        return f'{self.client.get_bitbucket_repo_count()} repositories'
 
 
 class Jsm(BaseApplication):
@@ -123,9 +141,7 @@ class Jsm(BaseApplication):
 
     @property
     def nodes_count(self):
-        jira_server_info = self.client.get_server_info()
-        jira_server_version = jira_server_info.get('version', '')
-        return self.client.get_cluster_nodes_count(jira_version=jira_server_version)
+        return len(self.client.get_nodes())
 
     def __issues_count(self):
         return self.client.get_total_issues_count()
